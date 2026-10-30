@@ -1,0 +1,302 @@
+print()
+print()
+print()
+print()
+print()
+
+#Import anything
+import math
+import numpy as np
+from scipy.optimize import minimize_scalar
+
+#SET THESE SAMPLING FREQUNCY GOALS
+f = 60 #Hz
+samples_per_second = 4000
+ac_cycles_per_datapoint = 10
+measurements_per_datapoint = round((ac_cycles_per_datapoint / f) * samples_per_second)
+
+
+
+################################### Make Variables
+#User Inputted Data 
+allowable_current = 10 #Amps
+allowable_voltage = 20 #Volts
+allowable_frequency = 60 #Hz
+node_name = 'Tester_device'
+
+#Collected Data empty vectors
+time_measurements = np.zeros(measurements_per_datapoint)
+voltage_measurements = np.zeros(measurements_per_datapoint)
+current_measurements = np.zeros(measurements_per_datapoint)
+
+#Make some fake data for my vectors for now
+time_measurements = np.arange(measurements_per_datapoint) / samples_per_second
+voltage_peak = 18        # V; stays below allowable_voltage of 20 V
+current_peak = 10        # A; reaches allowable_current of 10 A
+phase_lag = math.radians(20)
+voltage_measurements = voltage_peak * np.sin(2 * math.pi * f * time_measurements)
+current_measurements = current_peak * np.sin(2 * math.pi * f * time_measurements - phase_lag)
+
+#More random varibales i later realized i wanted to define
+sig_figs = 4
+voltage_tolerance = 5 #% more or less
+frequency_tolerance = 0.5 #hz more or less
+current_tolerance = 0 # I made a variable just in case we want to add some kind of tolerance
+allowable_current_THD = 10  # %; initial prototype threshold
+
+
+################################### Clean/spiffy up the incoming data
+
+# any missing measurements or skipped measurements that should e flagged? 
+# random electrical noise? -- apply a simple and not too constrained butterworth low pass filter 
+# consider the voltage sensor offset, calibrate
+
+
+
+################################### Calculate data about a single device for one single data point
+#Find RMS values
+V_rms = math.sqrt(np.mean(voltage_measurements ** 2)) #volts
+I_rms = math.sqrt(np.mean(current_measurements ** 2)) #amps
+
+#Find Real power
+P_real = np.mean(voltage_measurements * current_measurements) #watts
+
+#Find apparent power
+S_apparent = V_rms * I_rms  # volt amps
+
+#Find energy consumed ### based on defined measurements per time interval, maybe should pull from time vector
+energy = P_real * ((measurements_per_datapoint / samples_per_second)/3600000)
+
+#Find power factor ### not sure how useful this is yet
+P_factor = P_real / S_apparent
+
+#Print a summary of the above information 
+print("\n" + "=" * 40)
+print("Summary Info Of This Datapoint")
+print("=" * 40)
+
+print(f"Voltage RMS: {V_rms:.4g} V")
+print(f"Current RMS: {I_rms:.4g} A")
+print(f"Average Real Power: {P_real:.4g} W")
+print(f"Apparent Power: {S_apparent:.4g} VA")
+print(f"Energy Consumed: {energy:.4g} kWh")
+print(f"Power Factor: {P_factor:.4g}")
+print("=" * 40)
+
+
+
+# IEEE 519-2022 is a useful reference. For systems at or below 1 kV,
+# it specifies a 5% limit for individual voltage harmonics and an 8%
+# limit for total voltage harmonic distortion at the point of common
+# coupling (PCC)
+################################## Find Frequency
+################################### Find Frequency and Harmonic Distortion
+
+# STEP 1: Use FFT to find the approximate fundamental frequency
+# FFT tells us how much of each frequency is in our voltage waveform
+
+fft_values = np.fft.rfft(voltage_measurements)
+fft_frequencies = np.fft.rfftfreq(
+    len(voltage_measurements), 1 / samples_per_second
+)
+
+# Only search near the expected 60 Hz fundamental
+frequency_options = (fft_frequencies >= 55) & (fft_frequencies <= 65)
+
+# Find the frequency with the largest FFT magnitude in that range
+fft_magnitudes = np.abs(fft_values[frequency_options])
+fft_frequency_options = fft_frequencies[frequency_options]
+
+approximate_frequency = fft_frequency_options[np.argmax(fft_magnitudes)]
+
+
+# STEP 2: Fit a sine wave to get a more accurate frequency
+# Try different frequencies and see which sine wave best matches the data
+
+def sine_fit_error(test_frequency):
+
+    # Make a sine wave and cosine wave at the frequency being tested
+    sine_wave = np.sin(2 * np.pi * test_frequency * time_measurements)
+    cosine_wave = np.cos(2 * np.pi * test_frequency * time_measurements)
+
+    # Combine sine, cosine, and a constant offset into one matrix
+    wave_options = np.column_stack((
+        sine_wave,
+        cosine_wave,
+        np.ones(len(time_measurements))
+    ))
+
+    # Find the best combination to match our measured voltage
+    coefficients = np.linalg.lstsq(
+        wave_options, voltage_measurements, rcond=None
+    )[0]
+
+    fitted_voltage = wave_options @ coefficients
+
+    # Calculate how different the fitted wave is from measured voltage
+    error = np.mean((voltage_measurements - fitted_voltage) ** 2)
+
+    return error
+
+
+# Find the frequency that gives the smallest fitting error
+frequency_result = minimize_scalar(
+    sine_fit_error,
+    bounds=(approximate_frequency - 2, approximate_frequency + 2),
+    method='bounded'
+)
+
+measured_frequency = frequency_result.x
+
+
+# STEP 3: Calculate harmonic distortion for voltage and current
+# Harmonics are frequencies at 2x, 3x, 4x, etc. the fundamental frequency
+
+number_of_harmonics = 15
+
+# Make a list of sine and cosine waves for each harmonic
+harmonic_waves = [np.ones(len(time_measurements))]
+
+for harmonic_number in range(1, number_of_harmonics + 1):
+
+    harmonic_frequency = harmonic_number * measured_frequency
+
+    harmonic_waves.append(
+        np.sin(2 * np.pi * harmonic_frequency * time_measurements)
+    )
+
+    harmonic_waves.append(
+        np.cos(2 * np.pi * harmonic_frequency * time_measurements)
+    )
+
+harmonic_waves = np.column_stack(harmonic_waves)
+
+
+# STEP 4: Find how much of each harmonic exists in voltage and current
+
+voltage_coefficients = np.linalg.lstsq(
+    harmonic_waves, voltage_measurements, rcond=None
+)[0]
+
+current_coefficients = np.linalg.lstsq(
+    harmonic_waves, current_measurements, rcond=None
+)[0]
+
+voltage_harmonics = []
+current_harmonics = []
+
+for harmonic_number in range(1, number_of_harmonics + 1):
+
+    # Each harmonic has one sine and one cosine coefficient
+    i = 2 * harmonic_number - 1
+
+    # Combine them to find the RMS amplitude of that harmonic
+    voltage_harmonic_rms = math.sqrt(
+        voltage_coefficients[i]**2 +
+        voltage_coefficients[i+1]**2
+    ) / math.sqrt(2)
+
+    current_harmonic_rms = math.sqrt(
+        current_coefficients[i]**2 +
+        current_coefficients[i+1]**2
+    ) / math.sqrt(2)
+
+    voltage_harmonics.append(voltage_harmonic_rms)
+    current_harmonics.append(current_harmonic_rms)
+
+
+# STEP 5: Calculate THD
+# THD = RMS of all higher harmonics / RMS of fundamental x 100
+
+voltage_THD = (
+    math.sqrt(sum(value**2 for value in voltage_harmonics[1:]))
+    / voltage_harmonics[0] * 100
+)
+
+current_THD = (
+    math.sqrt(sum(value**2 for value in current_harmonics[1:]))
+    / current_harmonics[0] * 100
+)
+
+
+# STEP 6: Print the results
+
+print("\n" + "=" * 40)
+print("Frequency and Harmonic Distortion")
+print("=" * 40)
+
+print(f"Measured Frequency: {measured_frequency:.4f} Hz")
+print(f"Voltage THD: {voltage_THD:.4f} %")
+print(f"Current THD: {current_THD:.4f} %")
+
+print("=" * 40)
+
+
+
+
+
+
+################################### Detect Abnormal Conditions
+print("\n")
+print("=" * 40)
+print("Abnormal Conditions")
+print("=" * 40)
+
+
+# Check voltage
+if V_rms > allowable_voltage * (1 + voltage_tolerance/100):
+    print(f"WARNING: Overvoltage!!! {V_rms:.4g} V")
+elif V_rms < allowable_voltage * (1 - voltage_tolerance/100):
+    print(f"WARNING: Undervoltage!!! {V_rms:.4g} V")
+   
+# Check current
+if I_rms > allowable_current:
+    print(f"WARNING: Overcurrent! {I_rms:.4g} A")
+
+# Check frequency
+if measured_frequency > allowable_frequency + frequency_tolerance:
+    print(f"WARNING: Frequency too high! {measured_frequency:.4g} Hz")
+
+elif measured_frequency < allowable_frequency - frequency_tolerance:
+    print(f"WARNING: Frequency too low! {measured_frequency:.4g} Hz")
+
+# Check voltage harmonic distortion
+if voltage_THD > 8:
+    print(f"WARNING: High voltage distortion! THD = {voltage_THD:.4g}%")
+
+# Check current harmonic distortion
+if current_THD > allowable_current_THD:
+    print(f"WARNING: High current distortion! THD = {current_THD:.4g}%")
+
+
+
+
+
+
+
+
+
+
+print("=" * 40)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+print()
+print()
+print()
+print()
+print()
