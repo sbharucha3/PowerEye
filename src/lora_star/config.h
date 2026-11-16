@@ -20,15 +20,15 @@
 #define SF          7
 #define CR          5       // 4/5
 #define SYNC_WORD   0x12
-#define TX_POWER    22      // dBm, SX1262 maximum (~120 mA while transmitting)
+#define TX_POWER    10      // dBm. Bench setting (boards a few cm apart overload at 22). SX1262 max is 22 dBm for range tests
 #define PA_CURRENT_LIMIT 140.0   // mA, needed for 22 dBm
 #define PREAMBLE    8
 #define TCXO_V      1.8
 
 // ---------- Polling ----------
 #define NET_ID               0x5A   // rejects packets from other networks
-#define MAX_NODES            50     // node IDs 1..MAX_NODES
-#define CYCLE_MS             5000   // hub polls every known node once per cycle
+#define MAX_NODES            8      // node IDs 1..MAX_NODES
+#define CYCLE_MS             1000   // hub polls every known node once per cycle
 #define MAX_TRIES            3      // polls per node per cycle (1 + 2 retries, if time allows)
 #define OFFLINE_AFTER_FAILS  5      // missed cycles in a row before a node gets no retries
 #define DISCOVERY_PER_CYCLE  4      // unknown IDs probed each cycle (finds new nodes)
@@ -43,7 +43,7 @@
 // hub's clock), so samples from different nodes share identical timestamps.
 // Sampling is independent of polling: with a 5 s cycle and 3 s sampling,
 // each poll brings back 1-2 new samples.
-#define SAMPLE_MS        3000   // node sampling period
+#define SAMPLE_MS        1000   // node sampling period
 #define BUFFER_SAMPLES   1200   // samples kept on each node (1200 x 3 s = 60 min, ~24 KB RAM)
 #define MAX_PER_REPLY    3      // samples per reply: newest + up to 2 older ones
 #define BACKFILL_WINDOW  64     // hub can recover gaps up to 64 samples (~3 min at 3 s)

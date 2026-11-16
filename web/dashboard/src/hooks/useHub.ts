@@ -18,7 +18,7 @@ export interface HubEvent {
   text: string;
 }
 
-const POLL_MS = 2500;
+const POLL_MS = 1000;
 const HISTORY_MS = 6000;
 const MAX_FAILS = 3;
 const MAX_SNAPSHOTS = 4000;
