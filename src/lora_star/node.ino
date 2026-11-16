@@ -32,16 +32,15 @@ int64_t nextGridAfter(int64_t t) { return (t / SAMPLE_MS + 1) * SAMPLE_MS; }
 //  Placeholder sensors: REPLACE with your real sensor reads
 // ---------------------------------------------------------------------------
 void readSensors(SensorData& s) {
-  float t     = millis() / 1000.0f;
-  float volts = 120.0f + 1.5f * sinf(t / 7.0f + nodeId);
-  float amps  = 5.0f + 4.0f * sinf(t / 11.0f + nodeId * 0.7f);
-  float temp  = 25.0f + 0.1f * nodeId + 2.0f * sinf(t / 60.0f);
-
-  s.voltage_cV = (uint16_t)lroundf(volts * 100.0f);
-  s.current_cA = (int16_t)lroundf(amps * 100.0f);
+  pe::Reading r;
+  bool ok = pe::latest(r) && r.adcOk && r.ageMs < 3000;
+  float volts = ok ? r.vLine : 0.0f;
+  float amps  = ok ? r.iLine : 0.0f;
+  s.voltage_cV = (uint16_t)lroundf(constrain(volts, 0.0f, 650.0f) * 100.0f);
+  s.current_cA = (int16_t)lroundf(constrain(amps, -300.0f, 300.0f) * 100.0f);
   s.power_dW   = (int32_t)lroundf(volts * amps * 10.0f);
-  s.temp_cC    = (int16_t)lroundf(temp * 100.0f);
-  s.status     = 0;
+  s.temp_cC    = (int16_t)lroundf(chipTempC * 100.0f);
+  s.status     = ok ? pe::statusByte(r) : 0;   // bit0 good, bit1 bad, bit2 trip (see PowerEyeSense.h)
 }
 
 // ---------------------------------------------------------------------------
@@ -195,6 +194,7 @@ void nodeOnPacket(const uint8_t* buf, int len, float rssi, float snr, int64_t rx
 }
 
 void nodeLoop() {
+  pe::setLink((nodeId > 0 && lastPolledMs && millis() - lastPolledMs < 15000) ? pe::LINK_OK : pe::LINK_SEARCH);
   // Sample on the shared grid (every SAMPLE_MS of network time)
   int64_t now = nodeNetNow();
   if (now >= nextSampleNet) {
@@ -264,6 +264,7 @@ bool nodeCommand(String& line) {
 }
 
 void nodeSetup() {
+  pe::begin();   // ADC + OLED + LEDs run on their own task
   bootId = (uint16_t)(esp_random() & 0xFFFF) | 1;
   nextSampleNet = nextGridAfter(nodeNetNow());
   if (nodeId < 1 || nodeId > MAX_NODES) {
