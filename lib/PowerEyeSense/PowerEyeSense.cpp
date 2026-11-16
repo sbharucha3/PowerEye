@@ -27,7 +27,8 @@ const double SHUNT_OHM = 0.002;
 // ---------- signal limits ----------
 const float V_LO = 108.0f, V_HI = 132.0f;      // good band: 120 V +/- 10%
 const float V_TRIP = 140.0f;
-const float I_MAX = 16.0f;                     // above this: bad (design current is 15 A)
+const float I_MAX = 15.0f;                     // above this: bad (15 A design limit)
+const float I_MAX_CLEAR = 14.7f;               // hysteresis: must fall below this to go good again
 const float I_TRIP = 20.0f;                    // above this: trip
 const uint32_t TRIP_HOLD_MS = 5000;
 const double NO_INPUT_EVM_V = 0.020;           // below 20 mV RMS at the voltage EVM = nothing connected
@@ -162,7 +163,7 @@ void drawRows(const Reading &r, bool fault) {
     snprintf(top, sizeof top, "%s -> %.1fV", vs, r.vLine);
     snprintf(bot, sizeof bot, "%s -> %.2fA", is, r.iLine);
     vStat = (r.vLine >= V_LO && r.vLine <= V_HI) ? "OK" : (r.vLine > V_TRIP ? "TRIP" : "OUT OF RANGE");
-    iStat = r.iLine > I_TRIP ? "TRIP" : (r.iLine > I_MAX ? "HIGH" : "OK");
+    iStat = r.iLine > I_TRIP ? "TRIP" : (r.iLine > I_MAX_CLEAR ? (r.iLine > I_MAX ? "HIGH" : "OK") : "OK");
   }
   oled.clearBuffer();
   oled.setFont(u8g2_font_5x8_tr);
@@ -243,12 +244,14 @@ void senseTask(void *) {
     bool noInput = (vEvm < NO_INPUT_EVM_V) || (fabs(m0 * LSB_V) > 1.0 && pp0 < 0.02);
     float vLine = (float)(vEvm * DIV_RATIO), iLine = (float)(iEvm / SHUNT_OHM);
 
+    static bool iHigh = false;                      // hysteresis so 15.0 A does not flicker good/bad
+    if (iLine > I_MAX) iHigh = true; else if (iLine < I_MAX_CLEAR) iHigh = false;
     uint32_t now = millis();
     SigState st;
     if (!noInput && (iLine > I_TRIP || vLine > V_TRIP)) tripUntil = now + TRIP_HOLD_MS;
     if ((int32_t)(tripUntil - now) > 0)  st = SIG_TRIP;
     else if (noInput)                    st = SIG_NO_INPUT;
-    else if (!clip && vLine >= V_LO && vLine <= V_HI && iLine <= I_MAX) st = SIG_GOOD;
+    else if (!clip && vLine >= V_LO && vLine <= V_HI && !iHigh) st = SIG_GOOD;
     else                                 st = SIG_BAD;
 
     cur.valid = true; cur.adcOk = true; cur.state = st;
