@@ -87,18 +87,18 @@ void setLed(bool led2, bool r, bool g) {
 // Called often from the sample loop; only touches the bus when a LED actually changes.
 void ledTick(SigState s, bool fault) {
   uint32_t t = millis();
-  bool phase = (t / 250) & 1;
+  bool phase = (t / 125) & 1;          // trip/fault alternate every 125 ms (8 Hz)
   // LED 1: signal state. off = no input, green = good, red = bad, alternating red/green = trip or ADC fault
   if (fault || s == SIG_TRIP) setLed(false, phase, !phase);
   else if (s == SIG_GOOD)     setLed(false, false, true);
   else if (s == SIG_BAD)      setLed(false, true, false);
   else                        setLed(false, false, false);
-  // LED 2: link state. off = standalone, short green blip every 2 s = linked, orange blink = searching, red = radio fault
+  // LED 2: link state. steady green = linked (or standalone build), orange blink = searching, red = radio fault
   switch (link) {
-    case LINK_OK:     setLed(true, false, (t % 2000) < 120); break;
+    case LINK_OK:     setLed(true, false, true); break;
     case LINK_SEARCH: setLed(true, (t / 500) & 1, (t / 500) & 1); break;
     case LINK_FAULT:  setLed(true, true, false); break;
-    default:          setLed(true, false, false); break;
+    default:          setLed(true, false, true); break;   // LINK_NONE (standalone): steady green = powered
   }
 }
 
@@ -196,6 +196,10 @@ void senseTask(void *) {
   pcaInit();
   for (uint8_t i = 0; i < 4; i++) ledSet(i, 0);
   splash();
+  { // boot self-test: LED1 red, LED1 green, LED2 red, LED2 green (shows wiring is right)
+    const uint8_t seq[4] = {LED1_RED, LED1_GREEN, LED2_RED, LED2_GREEN};
+    for (uint8_t i = 0; i < 4; i++) { ledSet(seq[i], LED_DUTY); delay(300); ledSet(seq[i], 0); }
+  }
 
   pinMode(PIN_CS_ADC, OUTPUT); digitalWrite(PIN_CS_ADC, HIGH);
   pinMode(PIN_CS_CLK, OUTPUT); digitalWrite(PIN_CS_CLK, HIGH);
