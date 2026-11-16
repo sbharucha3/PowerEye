@@ -26,11 +26,8 @@ const double SHUNT_OHM = 0.002;
 
 // ---------- signal limits ----------
 const float V_LO = 108.0f, V_HI = 132.0f;      // good band: 120 V +/- 10%
-const float V_TRIP = 140.0f;
 const float I_MAX = 15.0f;                     // above this: bad (15 A design limit)
 const float I_MAX_CLEAR = 14.7f;               // hysteresis: must fall below this to go good again
-const float I_TRIP = 20.0f;                    // above this: trip
-const uint32_t TRIP_HOLD_MS = 5000;
 const double NO_INPUT_EVM_V = 0.020;           // below 20 mV RMS at the voltage EVM = nothing connected
 
 const int N_SAMPLES = 2400;                    // 0.6 s at 4 kSPS = 36 cycles of 60 Hz
@@ -44,7 +41,6 @@ Reading shared = {};
 uint32_t sharedMs = 0;
 volatile LinkState link = LINK_NONE;
 volatile bool adcOk = false;
-uint32_t tripUntil = 0;
 bool started = false;
 
 void IRAM_ATTR onDrdy() {
@@ -153,6 +149,10 @@ void drawRows(const Reading &r, bool fault) {
   if (fault) {
     snprintf(top, sizeof top, "ADC FAULT"); snprintf(bot, sizeof bot, "check wiring");
     vStat = "--"; iStat = "--";
+  } else if (r.state == SIG_TRIP) {
+    snprintf(top, sizeof top, "--.-mV -> --.-V");
+    snprintf(bot, sizeof bot, "--.-mV -> --.--A");
+    vStat = "TRIP"; iStat = "TRIP";
   } else if (r.state == SIG_NO_INPUT) {
     snprintf(top, sizeof top, "--.-mV -> --.-V");
     snprintf(bot, sizeof bot, "--.-mV -> --.--A");
@@ -162,8 +162,8 @@ void drawRows(const Reading &r, bool fault) {
     snprintf(is, sizeof is, "%.1fmV", r.iEvmMv);
     snprintf(top, sizeof top, "%s -> %.1fV", vs, r.vLine);
     snprintf(bot, sizeof bot, "%s -> %.2fA", is, r.iLine);
-    vStat = (r.vLine >= V_LO && r.vLine <= V_HI) ? "OK" : (r.vLine > V_TRIP ? "TRIP" : "OUT OF RANGE");
-    iStat = r.iLine > I_TRIP ? "TRIP" : (r.iLine > I_MAX_CLEAR ? (r.iLine > I_MAX ? "HIGH" : "OK") : "OK");
+    vStat = (r.vLine >= V_LO && r.vLine <= V_HI) ? "OK" : "OUT OF RANGE";
+    iStat = r.iLine > I_MAX ? "HIGH" : "OK";
   }
   oled.clearBuffer();
   oled.setFont(u8g2_font_5x8_tr);
@@ -252,9 +252,10 @@ void senseTask(void *) {
     if (iLine > I_MAX) iHigh = true; else if (iLine < I_MAX_CLEAR) iHigh = false;
     uint32_t now = millis();
     SigState st;
-    if (!noInput && (iLine > I_TRIP || vLine > V_TRIP)) tripUntil = now + TRIP_HOLD_MS;
-    if ((int32_t)(tripUntil - now) > 0)  st = SIG_TRIP;
-    else if (noInput)                    st = SIG_NO_INPUT;
+    // TRIP = both channels dropped to zero after the unit was active before (not right after boot)
+    static bool wasActive = false;
+    if (!noInput) wasActive = true;
+    if (noInput)                         st = (wasActive && iLine < 0.5f) ? SIG_TRIP : SIG_NO_INPUT;
     else if (!clip && vLine >= V_LO && vLine <= V_HI && !iHigh) st = SIG_GOOD;
     else                                 st = SIG_BAD;
 
