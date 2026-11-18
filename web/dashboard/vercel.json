@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/hub/:hubId",
+      "destination": "/index.html"
+    }
+  ]
+}
